@@ -70,6 +70,7 @@ abstract class ObjectRegistry implements Countable, IteratorAggregate
      * @param string $objectName The name/class of the object to load.
      * @param array $config Additional settings to use when loading the object.
      * @return mixed
+     * @throws \Exception If the class cannot be found.
      */
     public function load($objectName, $config = [])
     {
@@ -278,7 +279,11 @@ abstract class ObjectRegistry implements Countable, IteratorAggregate
                 $objectName = $i;
             }
             list(, $name) = pluginSplit($objectName);
-            $normal[$name] = ['class' => $objectName, 'config' => $config];
+            if (isset($config['class'])) {
+                $normal[$name] = $config;
+            } else {
+                $normal[$name] = ['class' => $objectName, 'config' => $config];
+            }
         }
 
         return $normal;
@@ -319,7 +324,7 @@ abstract class ObjectRegistry implements Countable, IteratorAggregate
             $this->unload($objectName);
         }
         if ($this instanceof EventDispatcherInterface && $object instanceof EventListenerInterface) {
-            $this->eventManager()->on($object);
+            $this->getEventManager()->on($object);
         }
         $this->_loaded[$name] = $object;
 
@@ -343,7 +348,7 @@ abstract class ObjectRegistry implements Countable, IteratorAggregate
 
         $object = $this->_loaded[$objectName];
         if ($this instanceof EventDispatcherInterface && $object instanceof EventListenerInterface) {
-            $this->eventManager()->off($object);
+            $this->getEventManager()->off($object);
         }
         unset($this->_loaded[$objectName]);
 

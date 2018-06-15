@@ -16,19 +16,21 @@ namespace TestApp;
 
 use Cake\Http\BaseApplication;
 use Cake\Routing\Middleware\RoutingMiddleware;
+use TestApp\Command\AbortCommand;
 
 class Application extends BaseApplication
 {
-    /**
-     * Bootstrap hook.
-     *
-     * Nerfed as this is for IntegrationTestCase testing.
-     *
-     * @return void
-     */
+
     public function bootstrap()
     {
-        // Do nothing.
+        parent::bootstrap();
+    }
+
+    public function console($commands)
+    {
+        return $commands
+            ->add('abort_command', AbortCommand::class)
+            ->addMany($commands->autoDiscover());
     }
 
     public function middleware($middleware)

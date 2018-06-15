@@ -19,9 +19,11 @@ use Cake\Event\EventManager;
 use Cake\Http\Response;
 use Cake\Routing\DispatcherFactory;
 use Cake\Routing\Router;
+use Cake\Routing\Route\InflectedRoute;
 use Cake\TestSuite\IntegrationTestCase;
 use Cake\Test\Fixture\AssertIntegrationTestCase;
 use Cake\Utility\Security;
+use Zend\Diactoros\UploadedFile;
 
 /**
  * Self test of the IntegrationTestCase
@@ -39,14 +41,94 @@ class IntegrationTestCaseTest extends IntegrationTestCase
         parent::setUp();
         static::setAppNamespace();
 
-        Router::connect('/get/:controller/:action', ['_method' => 'GET'], ['routeClass' => 'InflectedRoute']);
-        Router::connect('/head/:controller/:action', ['_method' => 'HEAD'], ['routeClass' => 'InflectedRoute']);
-        Router::connect('/options/:controller/:action', ['_method' => 'OPTIONS'], ['routeClass' => 'InflectedRoute']);
-        Router::connect('/:controller/:action/*', [], ['routeClass' => 'InflectedRoute']);
+        Router::reload();
+        Router::scope('/', function ($routes) {
+            $routes->setRouteClass(InflectedRoute::class);
+            $routes->get('/get/:controller/:action', []);
+            $routes->head('/head/:controller/:action', []);
+            $routes->options('/options/:controller/:action', []);
+            $routes->connect('/:controller/:action/*', []);
+        });
+        Router::$initialized = true;
+
+        $this->useHttpServer(true);
         DispatcherFactory::clear();
+    }
+
+    /**
+     * Helper for enabling the legacy stack for backwards compatibility testing.
+     *
+     * @return void
+     */
+    protected function useLegacyDispatcher()
+    {
         DispatcherFactory::add('Routing');
         DispatcherFactory::add('ControllerFactory');
+
         $this->useHttpServer(false);
+    }
+
+    /**
+     * Tests that all data that used by the request is cast to strings
+     *
+     * @return void
+     */
+    public function testDataCastToString()
+    {
+        $data = [
+            'title' => 'Blog Post',
+            'status' => 1,
+            'published' => true,
+            'not_published' => false,
+            'comments' => [
+                [
+                    'body' => 'Comment',
+                    'status' => 1,
+                ]
+            ],
+            'file' => [
+                'tmp_name' => __FILE__,
+                'size' => 42,
+                'error' => 0,
+                'type' => 'text/plain',
+                'name' => 'Uploaded file'
+            ],
+            'pictures' => [
+                'name' => [
+                    ['file' => 'a-file.png'],
+                    ['file' => 'a-moose.png']
+                ],
+                'type' => [
+                    ['file' => 'image/png'],
+                    ['file' => 'image/jpg']
+                ],
+                'tmp_name' => [
+                    ['file' => __FILE__],
+                    ['file' => __FILE__]
+                ],
+                'error' => [
+                    ['file' => 0],
+                    ['file' => 0]
+                ],
+                'size' => [
+                    ['file' => 17188],
+                    ['file' => 2010]
+                ],
+            ],
+            'upload' => new UploadedFile(__FILE__, 42, 0)
+        ];
+        $request = $this->_buildRequest('/posts/add', 'POST', $data);
+        $this->assertInternalType('string', $request['post']['status']);
+        $this->assertInternalType('string', $request['post']['published']);
+        $this->assertSame('0', $request['post']['not_published']);
+        $this->assertInternalType('string', $request['post']['comments'][0]['status']);
+        $this->assertInternalType('integer', $request['post']['file']['error']);
+        $this->assertInternalType('integer', $request['post']['file']['size']);
+        $this->assertInternalType('integer', $request['post']['pictures']['error'][0]['file']);
+        $this->assertInternalType('integer', $request['post']['pictures']['error'][1]['file']);
+        $this->assertInternalType('integer', $request['post']['pictures']['size'][0]['file']);
+        $this->assertInternalType('integer', $request['post']['pictures']['size'][1]['file']);
+        $this->assertInstanceOf(UploadedFile::class, $request['post']['upload']);
     }
 
     /**
@@ -165,7 +247,7 @@ class IntegrationTestCaseTest extends IntegrationTestCase
      */
     public function testCookieEncrypted()
     {
-        Security::salt('abcdabcdabcdabcdabcdabcdabcdabcdabcd');
+        Security::setSalt('abcdabcdabcdabcdabcdabcdabcdabcdabcd');
         $this->cookieEncrypted('KeyOfCookie', 'Encrypted with aes by default');
         $request = $this->_buildRequest('/tasks/view', 'GET', []);
         $this->assertStringStartsWith('Q2FrZQ==.', $request['cookies']['KeyOfCookie']);
@@ -174,20 +256,24 @@ class IntegrationTestCaseTest extends IntegrationTestCase
     /**
      * Test sending get requests.
      *
+     * @group deprecated
      * @return void
      */
-    public function testGet()
+    public function testGetLegacy()
     {
-        $this->assertNull($this->_response);
+        $this->useLegacyDispatcher();
+        $this->deprecated(function () {
+            $this->assertNull($this->_response);
 
-        $this->get('/request_action/test_request_action');
-        $this->assertNotEmpty($this->_response);
-        $this->assertInstanceOf('Cake\Http\Response', $this->_response);
-        $this->assertEquals('This is a test', $this->_response->getBody());
+            $this->get('/request_action/test_request_action');
+            $this->assertNotEmpty($this->_response);
+            $this->assertInstanceOf('Cake\Http\Response', $this->_response);
+            $this->assertEquals('This is a test', $this->_response->getBody());
 
-        $this->_response = null;
-        $this->get('/get/request_action/test_request_action');
-        $this->assertEquals('This is a test', $this->_response->getBody());
+            $this->_response = null;
+            $this->get('/get/request_action/test_request_action');
+            $this->assertEquals('This is a test', $this->_response->getBody());
+        });
     }
 
     /**
@@ -200,7 +286,6 @@ class IntegrationTestCaseTest extends IntegrationTestCase
         // first clean routes to have Router::$initailized === false
         Router::reload();
 
-        $this->useHttpServer(true);
         $this->configApplication(Configure::read('App.namespace') . '\ApplicationWithDefaultRoutes', null);
 
         $this->get('/some_alias');
@@ -251,9 +336,23 @@ class IntegrationTestCaseTest extends IntegrationTestCase
      *
      * @return void
      */
+    public function testGetSpecificRouteLegacy()
+    {
+        $this->useLegacyDispatcher();
+        $this->deprecated(function () {
+            $this->get('/get/request_action/test_request_action');
+            $this->assertResponseOk();
+            $this->assertEquals('This is a test', $this->_response->getBody());
+        });
+    }
+
+    /**
+     * Test sending get requests sets the request method
+     *
+     * @return void
+     */
     public function testGetSpecificRouteHttpServer()
     {
-        $this->useHttpServer(true);
         $this->get('/get/request_action/test_request_action');
         $this->assertResponseOk();
         $this->assertEquals('This is a test', $this->_response->getBody());
@@ -268,8 +367,6 @@ class IntegrationTestCaseTest extends IntegrationTestCase
     {
         $this->expectException(\LogicException::class);
         $this->expectExceptionMessage('Cannot load "TestApp\MissingApp" for use in integration');
-        DispatcherFactory::clear();
-        $this->useHttpServer(true);
         $this->configApplication('TestApp\MissingApp', []);
         $this->get('/request_action/test_request_action');
     }
@@ -281,8 +378,6 @@ class IntegrationTestCaseTest extends IntegrationTestCase
      */
     public function testGetHttpServer()
     {
-        DispatcherFactory::clear();
-        $this->useHttpServer(true);
         $this->assertNull($this->_response);
 
         $this->get('/request_action/test_request_action');
@@ -299,8 +394,6 @@ class IntegrationTestCaseTest extends IntegrationTestCase
      */
     public function testGetQueryStringHttpServer()
     {
-        $this->useHttpServer(true);
-
         $this->configRequest(['headers' => ['Content-Type' => 'text/plain']]);
         $this->get('/request_action/params_pass?q=query');
         $this->assertResponseOk();
@@ -309,8 +402,29 @@ class IntegrationTestCaseTest extends IntegrationTestCase
         $this->assertHeader('X-Middleware', 'true');
 
         $request = $this->_controller->request;
-        $this->assertContains('/request_action/params_pass?q=query', $request->here());
         $this->assertContains('/request_action/params_pass?q=query', $request->getRequestTarget());
+    }
+
+    /**
+     * Test that the PSR7 requests get query string data
+     *
+     * @group deprecated
+     * @return void
+     */
+    public function testGetQueryStringSetsHere()
+    {
+        $this->deprecated(function () {
+            $this->configRequest(['headers' => ['Content-Type' => 'text/plain']]);
+            $this->get('/request_action/params_pass?q=query');
+            $this->assertResponseOk();
+            $this->assertResponseContains('"q":"query"');
+            $this->assertResponseContains('"contentType":"text\/plain"');
+            $this->assertHeader('X-Middleware', 'true');
+
+            $request = $this->_controller->request;
+            $this->assertContains('/request_action/params_pass?q=query', $request->here());
+            $this->assertContains('/request_action/params_pass?q=query', $request->getRequestTarget());
+        });
     }
 
     /**
@@ -320,8 +434,6 @@ class IntegrationTestCaseTest extends IntegrationTestCase
      */
     public function testGetCookiesHttpServer()
     {
-        $this->useHttpServer(true);
-
         $this->configRequest(['cookies' => ['split_test' => 'abc']]);
         $this->get('/request_action/cookie_pass');
         $this->assertResponseOk();
@@ -334,10 +446,24 @@ class IntegrationTestCaseTest extends IntegrationTestCase
      *
      * @return void
      */
+    public function testPostDataLegacyDispatcher()
+    {
+        $this->useLegacyDispatcher();
+
+        $this->deprecated(function () {
+            $this->post('/request_action/post_pass', ['title' => 'value']);
+            $data = json_decode($this->_response->getBody());
+            $this->assertEquals('value', $data->title);
+        });
+    }
+
+    /**
+     * Test that the PSR7 requests receive post data
+     *
+     * @return void
+     */
     public function testPostDataHttpServer()
     {
-        $this->useHttpServer(true);
-
         $this->post('/request_action/post_pass', ['title' => 'value']);
         $data = json_decode($this->_response->getBody());
         $this->assertEquals('value', $data->title);
@@ -351,8 +477,6 @@ class IntegrationTestCaseTest extends IntegrationTestCase
      */
     public function testInputDataHttpServer()
     {
-        $this->useHttpServer(true);
-
         $this->post('/request_action/input_test', '{"hello":"world"}');
         if ($this->_response->getBody()->isSeekable()) {
             $this->_response->getBody()->rewind();
@@ -368,7 +492,6 @@ class IntegrationTestCaseTest extends IntegrationTestCase
      */
     public function testInputDataSecurityToken()
     {
-        $this->useHttpServer(true);
         $this->enableSecurityToken();
 
         $this->post('/request_action/input_test', '{"hello":"world"}');
@@ -383,8 +506,6 @@ class IntegrationTestCaseTest extends IntegrationTestCase
      */
     public function testSessionHttpServer()
     {
-        $this->useHttpServer(true);
-
         $this->session(['foo' => 'session data']);
         $this->get('/request_action/session_test');
         $this->assertResponseOk();
@@ -418,9 +539,6 @@ class IntegrationTestCaseTest extends IntegrationTestCase
      */
     public function testRequestSetsPropertiesHttpServer()
     {
-        $this->useHttpServer(true);
-        DispatcherFactory::clear();
-
         $this->post('/posts/index');
         $this->assertInstanceOf('Cake\Controller\Controller', $this->_controller);
         $this->assertNotEmpty($this->_viewName, 'View name not set');
@@ -458,6 +576,20 @@ class IntegrationTestCaseTest extends IntegrationTestCase
     }
 
     /**
+     * Test array URLs with an empty router.
+     *
+     * @return void
+     */
+    public function testArrayUrlsEmptyRouter()
+    {
+        Router::reload();
+        $this->assertFalse(Router::$initialized);
+
+        $this->post(['controller' => 'Posts', 'action' => 'index']);
+        $this->assertEquals('value', $this->viewVariable('test'));
+    }
+
+    /**
      * Test flash and cookie assertions
      *
      * @return void
@@ -478,7 +610,6 @@ class IntegrationTestCaseTest extends IntegrationTestCase
      */
     public function testFlashSessionAndCookieAssertsHttpServer()
     {
-        $this->useHttpServer(true);
         $this->post('/posts/index');
 
         $this->assertSession('An error message', 'Flash.flash.0.message');
@@ -660,7 +791,6 @@ class IntegrationTestCaseTest extends IntegrationTestCase
     public function testWithExpectedExceptionHttpServer()
     {
         DispatcherFactory::clear();
-        $this->useHttpServer(true);
 
         $this->get('/tests_apps/throw_exception');
         $this->assertResponseCode(500);
@@ -698,7 +828,6 @@ class IntegrationTestCaseTest extends IntegrationTestCase
     public function testRedirectHttpServer()
     {
         DispatcherFactory::clear();
-        $this->useHttpServer(true);
 
         $this->post('/tests_apps/redirect_to');
         $this->assertResponseCode(302);
@@ -847,7 +976,7 @@ class IntegrationTestCaseTest extends IntegrationTestCase
     public function testAssertContentType()
     {
         $this->_response = new Response();
-        $this->_response->type('json');
+        $this->_response = $this->_response->withType('json');
 
         $this->assertContentType('json');
         $this->assertContentType('application/json');
@@ -1002,9 +1131,6 @@ class IntegrationTestCaseTest extends IntegrationTestCase
      */
     public function testSendFileHttpServer()
     {
-        DispatcherFactory::clear();
-        $this->useHttpServer(true);
-
         $this->get('/posts/file');
         $this->assertFileResponse(TEST_APP . 'TestApp' . DS . 'Controller' . DS . 'PostsController.php');
     }
@@ -1045,5 +1171,34 @@ class IntegrationTestCaseTest extends IntegrationTestCase
         $this->expectExceptionMessage('A route matching "/foo" could not be found.');
         $this->disableErrorHandlerMiddleware();
         $this->get('/foo');
+    }
+
+    /**
+     * tests getting a secure action while passing a query string
+     *
+     * @return void
+     * @dataProvider methodsProvider
+     */
+    public function testSecureWithQueryString($method)
+    {
+        $this->enableSecurityToken();
+        $this->{$method}('/posts/securePost/?ids[]=1&ids[]=2');
+        $this->assertResponseOk();
+    }
+
+    /**
+     * data provider for HTTP methods
+     *
+     * @return array
+     */
+    public function methodsProvider()
+    {
+        return [
+            'GET' => ['get'],
+            'POST' => ['post'],
+            'PATCH' => ['patch'],
+            'PUT' => ['put'],
+            'DELETE' => ['delete'],
+        ];
     }
 }
